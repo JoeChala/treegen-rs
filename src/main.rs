@@ -3,7 +3,8 @@ use clap::Parser;
 use colored::*;
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{Write};
+use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 
@@ -54,10 +55,12 @@ fn main() -> Result<()> {
         }
         let lines = parse_structure_file(&template_path)
             .with_context(|| format!("Failed to read template file: {}", template_path.display()))?;
+
         collect_groups(&args.output, &[lines], &mut all_paths)?;
     } else if let Some(file) = args.from {
         let lines = parse_structure_file(&file)
             .with_context(|| format!("Failed to read structure file : {}",file.display()))?;
+
         collect_groups(&args.output, &[lines], &mut all_paths)?;
     } else if let Some(lang) = args.default {
         let structure = get_default(&lang);
@@ -108,6 +111,7 @@ fn main() -> Result<()> {
 }
 
 
+
 fn get_template_path(name: &str) -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".config/treegen/templates").join(format!("{}.txt",name))
@@ -116,18 +120,61 @@ fn get_template_path(name: &str) -> PathBuf {
 
 fn parse_structure_file(path: &Path) -> Result<Vec<String>> {
     let content = fs::read_to_string(path)
-        .with_context(|| format!("Cannot read file '{}'",path.display()))?;
-    let lines: Vec<String> = content
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .map(String::from)
-        .collect();
+        .with_context(|| format!("Cannot read file '{}'", path.display()))?;
+
+    let mut lines = Vec::new();
+    let mut dir_stack: Vec<String> = Vec::new();
+    let mut detected_indent = None;
+
+    for raw_line in content.lines() {
+        let trimmed = raw_line.trim_end();
+        if trimmed.trim().is_empty() {
+            continue;
+        }
+
+        // Replace tabs with spaces for consistent handling
+        let line = raw_line.replace('\t', "    ");
+
+        // Detect indentation width dynamically from first indented line
+        if detected_indent.is_none() {
+            if let Some(first_space) = line.find(|c: char| !c.is_whitespace()) {
+                if first_space > 0 {
+                    detected_indent = Some(first_space);
+                }
+            }
+        }
+
+        let indent_width = detected_indent.unwrap_or(4);
+        let indent_level = line.chars().take_while(|c| *c == ' ').count() / indent_width;
+
+        let name = line.trim();
+
+        while dir_stack.len() > indent_level {
+            dir_stack.pop();
+        }
+
+        let mut full_path = dir_stack.join("/");
+        if !full_path.is_empty() {
+            full_path.push('/');
+        }
+        full_path.push_str(name.trim_end_matches('/'));
+
+        lines.push(full_path.clone());
+
+        if name.ends_with('/') {
+            dir_stack.push(name.trim_end_matches('/').to_string());
+        }
+    }
 
     if lines.is_empty() {
-        eprintln!("{} template or structure file '{}' is empty.","Error".yellow(),path.display());
+        eprintln!(
+            "{} Structure file '{}' is empty.",
+            "Warning:".yellow(),
+            path.display()
+        );
         std::process::exit(1);
     }
+
     Ok(lines)
 }
 
@@ -183,30 +230,21 @@ fn parse_groups(tokens: Vec<String>) -> Vec<Vec<String>> {
 
 fn collect_groups(base: &Path, groups: &[Vec<String>], all_paths: &mut BTreeSet<PathBuf>) -> Result<()> {
     for group in groups {
-        let mut current_dir = base.to_path_buf();
-
         for token in group {
-            if token == ".." {
-                current_dir = current_dir.parent().unwrap_or(base).to_path_buf();
-                continue;
-            }
+            let clean = token.trim();
+            let clean = clean.trim_start_matches("./");
 
-            let path = current_dir.join(token);
+            // Construct full path relative to output directory
+            let path = base.join(clean);
+
             all_paths.insert(path.clone());
 
             if let Some(parent) = path.parent() {
                 all_paths.insert(parent.to_path_buf());
             }
-
-            // determine if token should be treated as a directory
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            let is_dir_like = path.extension().is_none() && !name.starts_with('.');
-
-            if is_dir_like {
-                current_dir = path;
-            }
         }
     }
+
     Ok(())
 }
 
@@ -227,7 +265,7 @@ fn print_tree(base: &Path, paths: &BTreeSet<PathBuf>) {
         let has_extension = path.extension().is_some();
         let is_special_file = ["Dockerfile", "Makefile"].contains(&name.as_ref());
 
-        if path.extension().is_none() {
+        if !has_extension && (!is_dotfile || !is_special_file) {
             // Folder
             println!("{}📁 {}", indent, name.blue().bold());
         } else {
@@ -242,6 +280,9 @@ fn print_tree(base: &Path, paths: &BTreeSet<PathBuf>) {
                 Some("css") => "🎨",
                 _ => "📄",
             };
+            if is_dotfile || is_special_file {
+                println!("{}{} {}",indent,"📝",name.red());
+            }
             println!("{}{} {}", indent, emoji, name.green());
         }
     }
@@ -249,18 +290,51 @@ fn print_tree(base: &Path, paths: &BTreeSet<PathBuf>) {
 
 
 fn create_path(path: &Path) -> Result<()> {
+    // If it already exists, ask what to do
+    if path.exists() {
+        let rel = path.display();
+        println!("Warning '{}' already exists.", rel);
+        print!("Do you want to overwrite (o), skip (s), or cancel (c)? [o/s/c]: ");
+        io::stdout().flush()?; // Make sure prompt shows
+
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        let choice = answer.trim().to_lowercase();
+
+        match choice.as_str() {
+            "s" | "skip" => {
+                println!("Skipped '{}'", rel);
+                return Ok(());
+            }
+            "c" | "cancel" => {
+                println!("Operation cancelled.");
+                std::process::exit(0);
+            }
+            "o" | "overwrite" | "" => {
+                // Continue to recreate the file/dir
+                if path.is_dir() {
+                    fs::remove_dir_all(path)
+                        .with_context(|| format!("Failed to remove existing directory '{}'", rel))?;
+                } else {
+                    fs::remove_file(path)
+                        .with_context(|| format!("Failed to remove existing file '{}'", rel))?;
+                }
+            }
+            _ => {
+                println!("Unknown option '{}', skipping '{}'.", choice, rel);
+                return Ok(());
+            }
+        }
+    }
+
+    // Make sure parent directories exist
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create directory '{}'", parent.display()))?;
     }
 
-    let file_like = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(|n| n.contains('.'))  // for dot files
-        .unwrap_or(false);
-
-    if path.extension().is_some() || file_like {
+    // Create either a directory or file
+    if path.extension().is_some() {
         fs::File::create(path)
             .with_context(|| format!("Failed to create file '{}'", path.display()))?;
     } else {
