@@ -2,7 +2,6 @@
 [![Language: Rust](https://img.shields.io/badge/language-Rust-orange?logo=rust)](https://www.rust-lang.org/)
 [![Last Commit](https://img.shields.io/github/last-commit/JoeChala/treegen-rs)](https://github.com/JoeChala/treegen-rs/commits/main)
 [![License](https://img.shields.io/github/license/JoeChala/treegen-rs)](LICENSE)
-[![Build](https://github.com/JoeChala/treegen-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/JoeChala/treegen-rs/actions)
 
 A simple CLI tool to generate project file structures from text, templates, or defaults.
 
@@ -13,7 +12,6 @@ A simple CLI tool to generate project file structures from text, templates, or d
 - [Getting Started](#getting-started)
 - [Usage Examples](#usage-examples)
 - [Templates](#templates)
-- [Contributing](#contributing)
 - [License](#license)
 ---
 
