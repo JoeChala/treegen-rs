@@ -29,6 +29,7 @@ Example:
 treegen src/core/test.rs .. lib.rs tests/test.rs : ui/f1.rs Cargo.toml
 ```
 creates:
+```bash
 src/
   core/
     test.rs
@@ -38,7 +39,7 @@ src/
 ui/
   f1.rs
 Cargo.toml
-
+```
 ---
 ## Getting Started
 ### Install
